@@ -77,11 +77,11 @@ func Open(driverName, dataSourceName string, flushInterval uint) (*DB, error) {
 	}
 
 	return &DB{
-		DB:                 dbh,
-		prepstmts:          make(map[string]*sql.Stmt),
-		driverName:         driverName,
-		flushInterval:      flushInterval,
-		batchInserts:       make(map[string]*insert),
+		DB:            dbh,
+		prepstmts:     make(map[string]*sql.Stmt),
+		driverName:    driverName,
+		flushInterval: flushInterval,
+		batchInserts:  make(map[string]*insert),
 	}, err
 }
 
@@ -112,6 +112,9 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 
 // FlushAll iterates over all batch inserts and inserts them into the database.
 func (d *DB) FlushAll() error {
+	//Clear All stmt
+	defer d.closeStmt()
+	//
 	for _, in := range d.batchInserts {
 		if in.insertCtr == 0 {
 			continue
@@ -123,6 +126,16 @@ func (d *DB) FlushAll() error {
 	return nil
 }
 
+//Must close stmt
+func (d *DB) closeStmt() {
+	if len(d.prepstmts) != 0 {
+		for k, stmt := range d.prepstmts {
+			stmt.Close()
+			delete(d.prepstmts, k)
+		}
+	}
+}
+
 // flushInsert performs the acutal batch-insert query.
 func (d *DB) flushInsert(in *insert) error {
 	var (
@@ -131,6 +144,7 @@ func (d *DB) flushInsert(in *insert) error {
 	)
 
 	// Prepare query
+	// Not found stmt , init it !
 	if _, ok := d.prepstmts[query]; !ok {
 		var stmt *sql.Stmt
 
