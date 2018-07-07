@@ -13,7 +13,6 @@ import (
 	"database/sql"
 	"regexp"
 	"strings"
-	"sync"
 )
 
 var (
@@ -26,8 +25,6 @@ var (
 //This means the fastsql.DB struct has, and allows, access to all of the standard library functionality while also providng a superset of functionality such as batch operations, autmatically created prepared statmeents, and more.
 type DB struct {
 	*sql.DB
-	PreparedStatements map[string]*sql.Stmt
-	prepstmts          map[string]*sql.Stmt
 	driverName         string
 	flushInterval      uint
 	batchInserts       map[string]*insert
@@ -35,33 +32,10 @@ type DB struct {
 
 // Close is the same a sql.Close, but first closes any opened prepared statements.
 func (d *DB) Close() error {
-	var (
-		wg sync.WaitGroup
-	)
-
 	if err := d.FlushAll(); err != nil {
 		return err
 	}
 
-	wg.Add(1)
-	go func(wg *sync.WaitGroup) {
-		defer wg.Done()
-
-		for _, stmt := range d.PreparedStatements {
-			_ = stmt.Close()
-		}
-	}(&wg)
-
-	wg.Add(1)
-	go func(wg *sync.WaitGroup) {
-		defer wg.Done()
-
-		for _, stmt := range d.prepstmts {
-			_ = stmt.Close()
-		}
-	}(&wg)
-
-	wg.Wait()
 	return d.DB.Close()
 }
 
@@ -78,8 +52,6 @@ func Open(driverName, dataSourceName string, flushInterval uint) (*DB, error) {
 
 	return &DB{
 		DB:                 dbh,
-		PreparedStatements: make(map[string]*sql.Stmt),
-		prepstmts:          make(map[string]*sql.Stmt),
 		driverName:         driverName,
 		flushInterval:      flushInterval,
 		batchInserts:       make(map[string]*insert),
@@ -121,38 +93,34 @@ func (d *DB) FlushAll() error {
 			return err
 		}
 	}
-
 	return nil
+}
+
+
+//Last Batch Insert
+func (d *DB) LastBatchInsert(query string) (err error) {
+	return d.flushInsert(d.batchInserts[query])
 }
 
 // flushInsert performs the acutal batch-insert query.
 func (d *DB) flushInsert(in *insert) error {
 	var (
-		err   error
 		query = in.queryPart1 + in.values[:len(in.values)-1] + in.queryPart3
 	)
-
 	// Prepare query
-	if _, ok := d.prepstmts[query]; !ok {
-		var stmt *sql.Stmt
-
-		if stmt, err = d.DB.Prepare(query); err == nil {
-			d.prepstmts[query] = stmt
-		} else {
+	stmt, err := d.DB.Prepare(query)
+	if err == nil {
+		// Executate batch insert
+		if _, err = stmt.Exec(in.bindParams...); err != nil {
 			return err
 		}
+		//Close stmt
+		stmt.Close()
+		// Reset vars
+		in.values = " VALUES"
+		in.bindParams = make([]interface{}, 0)
+		in.insertCtr = 0
 	}
-
-	// Executate batch insert
-	if _, err = d.prepstmts[query].Exec(in.bindParams...); err != nil {
-		return err
-	} //if
-
-	// Reset vars
-	in.values = " VALUES"
-	in.bindParams = make([]interface{}, 0)
-	in.insertCtr = 0
-
 	return err
 }
 
