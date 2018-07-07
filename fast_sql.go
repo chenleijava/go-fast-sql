@@ -25,9 +25,9 @@ var (
 //This means the fastsql.DB struct has, and allows, access to all of the standard library functionality while also providng a superset of functionality such as batch operations, autmatically created prepared statmeents, and more.
 type DB struct {
 	*sql.DB
-	driverName         string
-	flushInterval      uint
-	batchInserts       map[string]*insert
+	driverName    string
+	flushInterval uint
+	batchInserts  map[string]*insert
 }
 
 // Close is the same a sql.Close, but first closes any opened prepared statements.
@@ -51,10 +51,10 @@ func Open(driverName, dataSourceName string, flushInterval uint) (*DB, error) {
 	}
 
 	return &DB{
-		DB:                 dbh,
-		driverName:         driverName,
-		flushInterval:      flushInterval,
-		batchInserts:       make(map[string]*insert),
+		DB:            dbh,
+		driverName:    driverName,
+		flushInterval: flushInterval,
+		batchInserts:  make(map[string]*insert),
 	}, err
 }
 
@@ -86,16 +86,13 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 // FlushAll iterates over all batch inserts and inserts them into the database.
 func (d *DB) FlushAll() error {
 	for _, in := range d.batchInserts {
-		if in.insertCtr == 0 {
-			continue
-		}
+
 		if err := d.flushInsert(in); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-
 
 //Last Batch Insert
 func (d *DB) LastBatchInsert(query string) (err error) {
@@ -104,6 +101,10 @@ func (d *DB) LastBatchInsert(query string) (err error) {
 
 // flushInsert performs the acutal batch-insert query.
 func (d *DB) flushInsert(in *insert) error {
+	//No dat to insert db
+	if in.insertCtr == 0 {
+		return nil
+	}
 	var (
 		query = in.queryPart1 + in.values[:len(in.values)-1] + in.queryPart3
 	)
