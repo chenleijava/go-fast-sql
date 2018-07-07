@@ -9,7 +9,7 @@ import (
 )
 
 func TestDB_Close(t *testing.T) {
-	dbh, err := Open("mysql", "root:123456@tcp(127.0.0.1:3306)/dsp_db_setting?charset=utf8&loc=Asia%2FShanghai&parseTime=true", 1)
+	dbh, err := Open("mysql", "root:123456@tcp(127.0.0.1:3306)/dsp_db_setting?charset=utf8&loc=Asia%2FShanghai&parseTime=true", 2)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -21,6 +21,6 @@ func TestDB_Close(t *testing.T) {
 		dbh.BatchInsert(query, "aw123!@#:"+strconv.Itoa(j), "xxas", "com.xx.google.co", 12, 0, "1.0", 1, "石头哥", time.Now().UTC())
 		j++
 	}
-	dbh.LastFlushInsert(query)
+	dbh.LastFlushBatchInsert(query)
 	log.Printf("batch insert cost time:%d ms", common.GetTimeStampTimeMillis()-begin)
 }

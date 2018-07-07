@@ -11,7 +11,14 @@ package fastsql
 
 import (
 	"database/sql"
+	"regexp"
+	"strings"
 	"sync"
+)
+
+var (
+	dupeRegexp   = regexp.MustCompile(`(?i)on duplicate key update`)
+	valuesRegexp = regexp.MustCompile(`(?i)values`)
 )
 
 // DB is a database handle that embeds the standard library's sql.DB struct.
@@ -19,7 +26,7 @@ import (
 //This means the fastsql.DB struct has, and allows, access to all of the standard library functionality while also providng a superset of functionality such as batch operations, autmatically created prepared statmeents, and more.
 type DB struct {
 	*sql.DB
-	prepstmts     map[string]*sql.Stmt
+	prepstmts     map[*insert]*sql.Stmt
 	driverName    string
 	flushInterval uint
 	batchInserts  map[string]*insert
@@ -61,7 +68,7 @@ func Open(driverName, dataSourceName string, flushInterval uint) (*DB, error) {
 
 	return &DB{
 		DB:            dbh,
-		prepstmts:     make(map[string]*sql.Stmt),
+		prepstmts:     make(map[*insert]*sql.Stmt),
 		driverName:    driverName,
 		flushInterval: flushInterval,
 		batchInserts:  make(map[string]*insert),
@@ -74,6 +81,11 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 		d.batchInserts[query] = newInsert()
 	} //if
 
+	// Only split out query the first time Insert is called
+	if d.batchInserts[query].queryPart1 == "" {
+		d.batchInserts[query].splitQuery(query)
+	}
+
 	d.batchInserts[query].insertCtr++
 
 	// Build VALUES seciton of query and add to parameter slice
@@ -82,7 +94,7 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 
 	// If the batch interval has been hit, execute a batch insert
 	if d.batchInserts[query].insertCtr >= d.flushInterval {
-		err = d.flushInsert(query)
+		err = d.flushInsert(d.batchInserts[query])
 	} //if
 
 	return err
@@ -90,11 +102,11 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 
 // FlushAll iterates over all batch inserts and inserts them into the database.
 func (d *DB) FlushAll() error {
-	for q, in := range d.batchInserts {
+	for _, in := range d.batchInserts {
 		if in.insertCtr == 0 {
 			continue
 		}
-		if err := d.flushInsert(q); err != nil {
+		if err := d.flushInsert(in); err != nil {
 			return err
 		}
 	}
@@ -102,43 +114,46 @@ func (d *DB) FlushAll() error {
 }
 
 //LastFlush
-func (d *DB) LastFlushInsert(query string) error {
-	err := d.flushInsert(query)
-	if err != nil {
-		return err
-	}
-	//Close Stmt
-	if stmt, ok := d.prepstmts[query]; ok {
-		stmt.Close()
-		delete(d.prepstmts, query)
+func (d *DB) LastFlushBatchInsert(query string) error {
+	if in, find := d.batchInserts[query]; find {
+		if in.insertCtr != 0 {
+			err := d.flushInsert(in)
+			if err != nil {
+				return err
+			}
+		}
+		//No matter what close stmt
+		defer func(i *insert) {
+			if stmt, ok := d.prepstmts[i]; ok {
+				stmt.Close()
+				delete(d.prepstmts, i)
+			}
+		}(in)
 	}
 	return nil
 }
 
 // flushInsert performs the acutal batch-insert query.
-func (d *DB) flushInsert(query string) (error) {
-	var err error
-
-	//
-	in := d.batchInserts[query]
-	if in.insertCtr == 0 {
-		return nil
-	}
+func (d *DB) flushInsert(in *insert) (error) {
+	var (
+		err   error
+		query = in.queryPart1 + in.values[:len(in.values)-1] + in.queryPart3
+	)
 
 	// Prepare query
 	// Not found stmt , init it !
-	if _, ok := d.prepstmts[query]; !ok {
+	if _, ok := d.prepstmts[in]; !ok {
 		var stmt *sql.Stmt
 
 		if stmt, err = d.DB.Prepare(query); err == nil {
-			d.prepstmts[query] = stmt
+			d.prepstmts[in] = stmt
 		} else {
 			return err
 		}
 	}
 
 	// Executate batch insert
-	if _, err = d.prepstmts[query].Exec(in.bindParams...); err != nil {
+	if _, err = d.prepstmts[in].Exec(in.bindParams...); err != nil {
 		return err
 	} //if
 
@@ -172,5 +187,36 @@ func newInsert() *insert {
 	return &insert{
 		bindParams: make([]interface{}, 0),
 		values:     " VALUES",
+	}
+}
+
+func (in *insert) splitQuery(query string) {
+	var (
+		ndxOnDupe, ndxValues = -1, -1
+		ndxParens            = strings.LastIndex(query, ")")
+	)
+
+	// Find "VALUES".
+	valuesMatches := valuesRegexp.FindStringIndex(query)
+	if len(valuesMatches) > 0 {
+		ndxValues = valuesMatches[0]
+	}
+
+	// Find "ON DUPLICATE KEY UPDATE"
+	dupeMatches := dupeRegexp.FindAllStringIndex(query, -1)
+	if len(dupeMatches) > 0 {
+		ndxOnDupe = dupeMatches[len(dupeMatches)-1][0]
+	}
+
+	// Split out first part of query
+	in.queryPart1 = strings.TrimSpace(query[:ndxValues])
+
+	// If ON DUPLICATE clause exists, separate into 3 parts.
+	// If ON DUPLICATE does not exist, seperate into 2 parts.
+	if ndxOnDupe != -1 {
+		in.queryPart2 = query[ndxValues+6:ndxOnDupe-1] + ","
+		in.queryPart3 = query[ndxOnDupe:]
+	} else {
+		in.queryPart2 = query[ndxValues+6:ndxParens+1] + ","
 	}
 }
