@@ -13,7 +13,7 @@ Additional functionality inclues:
   2. Automatic creation and re-use of prepared statements.
   3. A convenient holder for manually used prepared statements.
 
-##Example usage
+## Example usage
 
 ```go
 package main
@@ -39,12 +39,15 @@ func main() {
 	defer dbh.Close()
 
 	// Some loop performing SQL INSERTs
+	var base="INSERT INTO test_table(id, id2, id3) VALUES(?, ?, ?);"
 	for i <= 250 {
-		if err = dbh.BatchInsert("INSERT INTO test_table(id, id2, id3) VALUES(?, ?, ?);", i, i + 1, i + 2); err != nil {
+		if err = dbh.BatchInsert(base, i, i + 1, i + 2); err != nil {
 			log.Fatalln(err)
 		}
 
 		i++
 	}
+	//flush last data into Db
+	dbh.LastBatchInsert(base)
 }
 ```
