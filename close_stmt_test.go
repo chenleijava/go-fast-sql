@@ -22,5 +22,11 @@ func TestDB_Close(t *testing.T) {
 		j++
 	}
 	dbh.LastBatchInsert(query)
+	//Mock seconds call ,the stmtQuery not be del
+	dbh.BatchInsert(query, "aw123!@#:"+strconv.Itoa(j), "xxas", "com.xx.google.co", 12, 0, "1.0", 1, "石头哥", time.Now().UTC())
+
+	//last xx
+	dbh.LastBatchInsert(query)
+
 	log.Printf("batch insert cost time:%d ms", common.GetTimeStampTimeMillis()-begin)
 }

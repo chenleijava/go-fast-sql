@@ -25,9 +25,36 @@ var (
 //This means the fastsql.DB struct has, and allows, access to all of the standard library functionality while also providng a superset of functionality such as batch operations, autmatically created prepared statmeents, and more.
 type DB struct {
 	*sql.DB
-	driverName    string
-	flushInterval uint
-	batchInserts  map[string]*insert
+	driverName       string
+	flushInterval    uint
+	batchInserts     map[string]*insert
+	stmtMappingQuery map[string]*StmtQuery //
+}
+
+//
+type StmtQuery struct {
+	prepareStmts map[string]*sql.Stmt
+}
+
+//Get stmt by stmtQuery
+//Automatic creation and re-use of prepared statements.
+//stmtQuery only create once , if baseQuery not found !!!
+func (d *DB) getStmt(baseQuery, buildQuery string) (*sql.Stmt, error) {
+	stmtQuery := d.stmtMappingQuery[baseQuery]
+	if stmtQuery == nil {
+		stmtQuery = &StmtQuery{prepareStmts: make(map[string]*sql.Stmt)}
+		d.stmtMappingQuery[baseQuery] = stmtQuery
+	}
+	stmt := stmtQuery.prepareStmts[buildQuery]
+	if stmt == nil {
+		stmtTemp, err := d.DB.Prepare(buildQuery)
+		if err != nil {
+			return nil, err
+		}
+		stmtQuery.prepareStmts[buildQuery] = stmtTemp
+		stmt = stmtTemp
+	}
+	return stmt, nil
 }
 
 // Close is the same a sql.Close, but first closes any opened prepared statements.
@@ -51,10 +78,11 @@ func Open(driverName, dataSourceName string, flushInterval uint) (*DB, error) {
 	}
 
 	return &DB{
-		DB:            dbh,
-		driverName:    driverName,
-		flushInterval: flushInterval,
-		batchInserts:  make(map[string]*insert),
+		DB:               dbh,
+		driverName:       driverName,
+		flushInterval:    flushInterval,
+		batchInserts:     make(map[string]*insert),
+		stmtMappingQuery: make(map[string]*StmtQuery),
 	}, err
 }
 
@@ -77,7 +105,7 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 
 	// If the batch interval has been hit, execute a batch insert
 	if d.batchInserts[query].insertCtr >= d.flushInterval {
-		err = d.flushInsert(d.batchInserts[query])
+		err = d.flushInsert(query)
 	} //if
 
 	return err
@@ -85,9 +113,9 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 
 // FlushAll iterates over all batch inserts and inserts them into the database.
 func (d *DB) FlushAll() error {
-	for _, in := range d.batchInserts {
+	for query := range d.batchInserts {
 
-		if err := d.flushInsert(in); err != nil {
+		if err := d.flushInsert(query); err != nil {
 			return err
 		}
 	}
@@ -96,11 +124,21 @@ func (d *DB) FlushAll() error {
 
 //Last Batch Insert
 func (d *DB) LastBatchInsert(query string) (err error) {
-	return d.flushInsert(d.batchInserts[query])
+	defer func() {
+		for _, stmtQuery := range d.stmtMappingQuery {
+			//	Only del buildQuery mapping
+			for buildQuery, stmt := range stmtQuery.prepareStmts {
+				stmt.Close() // close stmt, release conns etc .
+				delete(stmtQuery.prepareStmts, buildQuery)
+			}//done
+		}//done
+	}()
+	return d.flushInsert(query)
 }
 
 // flushInsert performs the acutal batch-insert query.
-func (d *DB) flushInsert(in *insert) error {
+func (d *DB) flushInsert(baseQuery string) error {
+	in := d.batchInserts[baseQuery]
 	//No dat to insert db
 	if in.insertCtr == 0 {
 		return nil
@@ -108,15 +146,13 @@ func (d *DB) flushInsert(in *insert) error {
 	var (
 		query = in.queryPart1 + in.values[:len(in.values)-1] + in.queryPart3
 	)
-	// Prepare query
-	stmt, err := d.DB.Prepare(query)
+	// Get prepare query
+	stmt, err := d.getStmt(baseQuery, query)
 	if err == nil {
 		// Executate batch insert
 		if _, err = stmt.Exec(in.bindParams...); err != nil {
 			return err
 		}
-		//Close stmt
-		stmt.Close()
 		// Reset vars
 		in.values = " VALUES"
 		in.bindParams = make([]interface{}, 0)
