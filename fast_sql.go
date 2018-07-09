@@ -124,15 +124,17 @@ func (d *DB) FlushAll() error {
 
 //Last Batch Insert
 func (d *DB) LastBatchInsert(query string) (err error) {
-	defer func() {
-		for _, stmtQuery := range d.stmtMappingQuery {
-			//	Only del buildQuery mapping
+	defer func(q *string) {
+		//  Del query mapping
+		//	Only del buildQuery mapping
+		stmtQuery := d.stmtMappingQuery[*q]
+		if stmtQuery != nil {
 			for buildQuery, stmt := range stmtQuery.prepareStmts {
 				stmt.Close() // close stmt, release conns etc .
 				delete(stmtQuery.prepareStmts, buildQuery)
-			}//done
-		}//done
-	}()
+			} //done
+		}
+	}(&query)
 	return d.flushInsert(query)
 }
 
