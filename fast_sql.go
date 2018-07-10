@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 var (
@@ -28,7 +29,9 @@ type DB struct {
 	driverName       string
 	flushInterval    uint
 	batchInserts     map[string]*insert
-	stmtMappingQuery map[string]*StmtQuery //
+	batchInsertsLock sync.Mutex
+
+	stmtMappingQuery     map[string]*StmtQuery //
 }
 
 //
@@ -88,6 +91,9 @@ func Open(driverName, dataSourceName string, flushInterval uint) (*DB, error) {
 
 // BatchInsert takes a singlular INSERT query and converts it to a batch-insert query for the caller.  A batch-insert is ran every time BatchInsert is called a multiple of flushInterval times.
 func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
+	d.batchInsertsLock.Lock()
+	defer d.batchInsertsLock.Unlock()
+
 	if _, ok := d.batchInserts[query]; !ok {
 		d.batchInserts[query] = newInsert()
 	} //if
@@ -113,6 +119,10 @@ func (d *DB) BatchInsert(query string, params ...interface{}) (err error) {
 
 // FlushAll iterates over all batch inserts and inserts them into the database.
 func (d *DB) FlushAll() error {
+
+	d.batchInsertsLock.Lock()
+	defer d.batchInsertsLock.Unlock()
+
 	for query := range d.batchInserts {
 
 		if err := d.flushInsert(query); err != nil {
@@ -124,18 +134,21 @@ func (d *DB) FlushAll() error {
 
 //Last Batch Insert
 func (d *DB) LastBatchInsert(query string) (err error) {
-	defer func(q *string) {
-		//  Del query mapping
-		//	Only del buildQuery mapping
-		stmtQuery := d.stmtMappingQuery[*q]
-		if stmtQuery != nil {
-			for buildQuery, stmt := range stmtQuery.prepareStmts {
-				stmt.Close() // close stmt, release conns etc .
-				delete(stmtQuery.prepareStmts, buildQuery)
-			} //done
-		}
-	}(&query)
-	return d.flushInsert(query)
+
+	d.batchInsertsLock.Lock()
+	defer d.batchInsertsLock.Unlock()
+
+	e := d.flushInsert(query)
+	//  Del query mapping
+	//	Only del buildQuery mapping
+	stmtQuery := d.stmtMappingQuery[query]
+	if stmtQuery != nil {
+		for buildQuery, stmt := range stmtQuery.prepareStmts {
+			stmt.Close() // close stmt, release conns etc .
+			delete(stmtQuery.prepareStmts, buildQuery)
+		} //done
+	}
+	return e
 }
 
 // flushInsert performs the acutal batch-insert query.
