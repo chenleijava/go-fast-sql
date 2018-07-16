@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"log"
 )
 
 var (
@@ -31,7 +32,7 @@ type DB struct {
 	batchInserts     map[string]*insert
 	batchInsertsLock sync.Mutex
 
-	stmtMappingQuery     map[string]*StmtQuery //
+	stmtMappingQuery map[string]*StmtQuery //
 }
 
 //
@@ -161,6 +162,10 @@ func (d *DB) flushInsert(baseQuery string) error {
 	var (
 		query = in.queryPart1 + in.values[:len(in.values)-1] + in.queryPart3
 	)
+
+	//debug sql
+	log.Printf("sql:\n %s", query)
+
 	// Get prepare query
 	stmt, err := d.getStmt(baseQuery, query)
 	if err == nil {
